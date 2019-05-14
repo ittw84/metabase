@@ -38,7 +38,7 @@
         table-name       (if (:alias? table)
                            (:name table)
                            source-table-alias)
-        field-identifier (keyword (hx/qualify-and-escape-dots table-name (:name field)))]
+        field-identifier (sql.qp/->honeysql driver (hx/identifier table-name (:name field)))]
     (sql.qp/cast-unix-timestamp-field-if-needed driver field field-identifier)))
 
 (defmethod sql.qp/apply-top-level-clause [:sparksql :page] [_ _ honeysql-form {{:keys [items page]} :page}]
@@ -57,9 +57,10 @@
             (h/limit items))))))
 
 (defmethod sql.qp/apply-top-level-clause [:sparksql :source-table]
-  [_ _ honeysql-form {source-table-id :source-table}]
+  [driver _ honeysql-form {source-table-id :source-table}]
   (let [{table-name :name, schema :schema} (qp.store/table source-table-id)]
-    (h/from honeysql-form [(hx/qualify-and-escape-dots schema table-name) source-table-alias])))
+    (h/from honeysql-form [(sql.qp/->honeysql driver (hx/identifier schema table-name))
+                           source-table-alias])))
 
 
 ;;; ------------------------------------------- Other Driver Method Impls --------------------------------------------
@@ -89,16 +90,19 @@
     (s/replace s #"-" "_")))
 
 ;; workaround for SPARK-9686 Spark Thrift server doesn't return correct JDBC metadata
-(defmethod driver/describe-database :sparksql [_ {:keys [details] :as database}]
-  {:tables (with-open [conn (jdbc/get-connection (sql-jdbc.conn/db->pooled-connection-spec database))]
-             (set (for [result (jdbc/query {:connection conn}
-                                           ["show tables"])]
-                    {:name   (:tablename result)
-                     :schema (when (> (count (:database result)) 0)
-                               (:database result))})))})
+(defmethod driver/describe-database :sparksql
+  [_ {:keys [details] :as database}]
+  {:tables
+   (with-open [conn (jdbc/get-connection (sql-jdbc.conn/db->pooled-connection-spec database))]
+     (set (for [result (jdbc/query {:connection conn}
+                                   ["show tables"])]
+            {:name   (:tablename result)
+             :schema (when (> (count (:database result)) 0)
+                       (:database result))})))})
 
 ;; workaround for SPARK-9686 Spark Thrift server doesn't return correct JDBC metadata
-(defmethod driver/describe-table :sparksql [_ {:keys [details] :as database} table]
+(defmethod driver/describe-table :sparksql
+  [_ {:keys [details] :as database} table]
   (with-open [conn (jdbc/get-connection (sql-jdbc.conn/db->pooled-connection-spec database))]
     {:name   (:name table)
      :schema (:schema table)
